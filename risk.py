@@ -261,8 +261,9 @@ class RiskGame:
     def get_bonus_troops(self, player):
         bonus = 0
         n_terr = len(player.territories)
-        if n_terr > 11:
-            n_terr -= 12
+        ter_min = len(self.level.regions)/3-2
+        if n_terr >= ter_min:
+            n_terr -= ter_min
             t_bonus = 1+n_terr/3
             bonus += t_bonus
             #print "territory bonus", t_bonus,
@@ -376,7 +377,9 @@ class RiskApp:
             
             elif game.state == S_INIT:
                 print "Setup players"
-                num_players = self.ask("How many players (3..5) ?", 3, 5)
+                level = self.game.level
+                num_players = self.ask("How many players (%d..%d) ?" % \
+                    (level.min_player, level.max_player), level.min_player, level.max_player)
                 
                 namelist = copy(PlayerList)
                 random.shuffle(namelist)

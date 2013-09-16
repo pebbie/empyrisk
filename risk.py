@@ -134,6 +134,9 @@ class RiskLevel:
         self.min_player = lvl.getint('rule','min_players')
         self.max_player = lvl.getint('rule','max_players')
         self.min_territories=[int(v) for v in lvl.get('rule','min_territories').split(',')]
+        self.min_trade=lvl.getint('traderule','min_trade')
+        self.max_trade=lvl.getint('traderule','max_trade')
+        self.trade_count=[int(v) for v in lvl.get('traderule','trade_num').split(',')]
         groups = [grp.strip() for grp in lvl.get('level','groups').split(",")]
         regionmap = {}
         for group in groups:
@@ -276,6 +279,16 @@ class RiskGame:
                 bonus += g_bonus
         #if g_bonus>0: print "Region group bonus", g_bonus,
         return bonus
+        
+    def trade_cards(self, player, cards_list):
+        n_stars = 0
+        for card in cards_list:
+            n_stars += card.star
+        if n_stars < self.level.min_trade or n_stars > self.level.max_trade:
+            return False
+        else:
+            player.reserve += self.level.trade_count[n_stars-self.level.min_trade]
+            return True
             
         
 O_EXIT = "Exit game"
@@ -294,6 +307,25 @@ class RiskApp:
             v = int(str_in)
             if v in range(0,len(options)):
                 break
+        return v
+        
+    def menu_multi(self,options):
+        while True:
+            print "Available options : "
+            print 0,"Cancel"
+            for i,item in enumerate(options):
+                print i+1, item
+            str_in = raw_input("Please select one above or comma separated options (1..%d)" % (len(options))).strip()
+            if len(str_in)==0: continue
+            if str_in.isdigit():
+                v = int(str_in)
+                if v in range(0,len(options)+1):
+                    v = [v]
+                    break
+            else:
+                if str_in.index(",") != -1:
+                    v = [int(vs.strip()) for vs in str_in.split(",") if int(vs.strip()) in range(1,len(options)+1)]
+            
         return v
         
     def ask(self, question, low, high):
@@ -341,31 +373,29 @@ class RiskApp:
                 else:
                     game.load_level(levels[sel-1])
                     print game.level
-                    """
-                    for group in game.level.groups:
-                        print "regions of ",group.name
-                        for region in group.regions:
-                            for neighbor in region.neighbors:
-                                print region.name,"is neighbor of",neighbor.name
-                        self.menu(["Enter 0 to continue"])
-                    """
+            
             elif game.state == S_INIT:
                 print "Setup players"
                 num_players = self.ask("How many players (3..5) ?", 3, 5)
+                
                 namelist = copy(PlayerList)
                 random.shuffle(namelist)
                 for i in xrange(0, num_players):
                     #name = raw_input("Player %d's name :" % (i+1))
-                    name = namelist.pop()#auto
+                    #comment line below and uncomment line above for manual input
+                    name = namelist.pop()
                     player = RiskPlayer(name)
                     game.add_player(player)
+                    
                 print "Ordering turn"
                 game.order_turn()
                 print [p.name for p in game.turn_order]
+                
                 print "Distributing initial territories"
                 game.init_territories()
                 print "\t\tSTART"
                 game.state = S_TURN
+                
             elif game.state == S_TURN:
                 player = game.get_turn()
                 print "\t\t",player.name,"turn"
@@ -376,10 +406,32 @@ class RiskApp:
                 player.reserve += reserve
                 print player.name, "receives", reserve
                 
-                sel = self.menu(["Quit", "Assign troops"])
+                turn_options = ["Quit", "Assign troops"]
+                if len(player.cards)>0:
+                    turn_options.append("Trade risk card(s)")
+                sel = self.menu(turn_options)
                 if sel==0:
                     game.stop()
-                else:
+                
+                elif sel==2:
+                    ordered_cards = sorted(player.cards, key=lambda c:c.star)
+                    sel_opt = self.menu_multi(["%s (%d)" % (card.name, card.star) for card in ordered_cards])
+                    cards_to_trade = []
+                    if len(sel_opt)==1 and sel_opt[0]==0:
+                            continue
+                    else:
+                        for sel_o in sel_opt:
+                            sel_card = ordered_cards[sel_o-1]
+                            cards_to_trade.append(sel_card)
+                            player.cards.remove(sel_card)
+                        if not game.trade_cards(player, cards_to_trade):
+                            #put cards back to player
+                            for card in cards_to_trade:
+                                player.cards.append(card)
+                        else:
+                            print player.name, "trade risk %d card to receive" % (len(cards_to_trade)), player.reserve
+                
+                elif sel==1:
                     print "Assign troops"
                     while reserve > 0:
                         self.player_stat(player)
@@ -475,6 +527,7 @@ class RiskApp:
                     
                     #End turn
                     if capture_win:
+                        print player.name,"pick a card from the deck"
                         player.cards.append(game.pick_card())
                                 
                     maneuver_source = [r for r in player.territories if r.troops>1]

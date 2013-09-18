@@ -38,6 +38,64 @@ def compare_roll(attack, defense):
         else:
             result.append(-1)
     return result
+    
+class RiskBot:
+    def __init__(self, player_handle):
+        self.puppet = player_handle
+        
+    def ask_trade(self):
+        """return 1 to assign or 3 to trade"""
+        if len(self.puppet.cards)>2:
+            if random.randint(1,10)>4:
+                return 3
+            else:
+                return 1
+        else:
+            return 1
+        
+    def select_tradecards(self,cardset):
+        """return list of integer, index of ordered cards"""
+        return [i+1 for i,c in enumerate(cardset)]
+        
+    def get_deployment(self):
+        """return territory object and number of deployment"""
+        ocregions = copy(self.puppet.territories)
+        random.shuffle(ocregions)
+        target_deploy = ocregions.pop()
+        return target_deploy, random.randint(1, self.puppet.reserve)
+        
+    def select_action(self, attack_options):
+        """return 0 to end turn or 5 to attack"""
+        return 5 if len(attack_options)>0 else 0
+        
+    def select_attack_target(self, attack_target):
+        if len(attack_target) > 1:
+            return random.randint(1, len(attack_target))
+        else: 
+            return 1
+        
+    def select_attack_source(self, attack_source):
+        return random.randint(0, len(attack_source)-1)
+        
+    def determine_attack_force(self, source_region):
+        return source_region.max_mobile()
+        
+    def decide_continue_attack(self, num_wins, num_loss, is_captured):
+        return random.randint(0,1)
+        
+    def decide_maneuver(self):
+        return True
+        
+    def determine_maneuver_source(self, man_source):
+        man = copy(man_source)
+        random.shuffle(man)
+        source = man.pop()
+        return source, random.randint(1, source.max_mobile())
+        
+    def select_maneuver_target(self, man_target):
+        """"""
+        random.shuffle(man_target)
+        return man_target.pop()
 
 class RiskPlayer:
     def __init__(self, name):
@@ -47,6 +105,7 @@ class RiskPlayer:
         self.territories = []
         
     def get_target(self,game,min_troop=0):
+        #print "get attack target for",self.name,
         neighbors = []
         for group in game.level.groups:
             group_neighbors = []
@@ -58,6 +117,7 @@ class RiskPlayer:
                                 group_neighbors.append(neighbor)
             if len(group_neighbors)>0:
                 neighbors += sorted(group_neighbors, reverse=True, key=lambda x:x.troops)
+        #print "done"
         return neighbors
         
     def pick_card(self, game):
@@ -205,6 +265,17 @@ class RiskGame:
         self.leveldir = "levels"
         self.num_turn = 0
         self.deck = []
+        self.bots = {}
+        
+    def new_bot(self, name):
+        player = self.new_player(name)
+        self.bots[name] = RiskBot(player)
+        return player
+        
+    def new_player(self, name):
+        player = RiskPlayer(name)
+        self.add_player(player)
+        return player
         
     def get_levels(self):
         return [dir for dir in os.listdir(self.leveldir) if path.isdir(path.join(self.leveldir, dir))]
@@ -317,10 +388,12 @@ class RiskGame:
             if fight==1:
                 num_wins += 1
                 target.troops -= 1
+                #guard
+                if target.troops==0:
+                    break
             elif fight==-1:
                 num_loss += 1
                 num_attack -= 1
-                
         
         if target.troops==0:
             target.capture(player)
@@ -425,9 +498,18 @@ class RiskApp:
                                 print "  ",region.name,"is backed by",r.name,"with",r.troops,"force"
                             else:
                                 print "  ",r.owner.name,"occupied",r.name,"with",r.troops,"force"
+                                
+    def all_players_stat(self):
+        for player in self.game.turn_order:
+            print player.name,"occupied",len(player.territories),"region(s)",
+            if len(player.cards)==0:
+                print
+            else:
+                print "and has",len(player.cards),"card(s)"
                                             
     def run(self):
         game = self.game
+        all_bot = False
         while not game.is_terminated():
             if game.state == S_START:
                 print "RISK GAME"
@@ -460,11 +542,14 @@ class RiskApp:
                 namelist = copy(PlayerList)
                 random.shuffle(namelist)
                 for i in xrange(0, num_players):
-                    #name = raw_input("Player %d's name :" % (i+1))
-                    #comment line below and uncomment line above for manual input
-                    name = namelist.pop()
-                    player = RiskPlayer(name)
-                    game.add_player(player)
+                    name = raw_input("Player %d's name (empty for bot):" % (i+1))
+                    if len(name.strip())==0:
+                        name = namelist.pop()
+                        game.new_bot(name)
+                    else:
+                        game.new_player(name)
+                        
+                all_bot = all([player.name in game.bots for player in game.players])
                     
                 print "Ordering turn"
                 game.order_turn()
@@ -477,6 +562,11 @@ class RiskApp:
                 
             elif game.state == S_TURN:
                 player = game.get_turn()
+                if len(player.territories)==0: 
+                    game.end_turn()
+                    continue
+                is_bot = player.name in game.bots
+                robot = game.bots[player.name]
                 print "\t\t",player.name,"turn"
                 game.order_territories()
                 
@@ -485,18 +575,29 @@ class RiskApp:
                 player.reserve += reserve
                 print player.name, "receives", reserve
                 
-                turn_options = ["Quit", "Assign troops"]
-                if len(player.cards)>0:
-                    turn_options.append("Trade risk card(s)")
-                sel = self.menu(turn_options)
+                if is_bot:
+                    sel = robot.ask_trade() #trade or assign
+                else:
+                    turn_options = ["Quit", "Assign troops","Game overview"]
+                    if len(player.cards)>0:
+                        turn_options.append("Trade risk card(s)")
+                    sel = self.menu(turn_options)
+                    
                 if sel==0:
                     if self.menu([O_QUIT, O_SAVE])==1:
                         game.save(GAME_SAVE)
                     game.stop()
                 
                 elif sel==2:
+                    self.all_players_stat()
+                    
+                elif sel==3:
                     ordered_cards = sorted(player.cards, key=lambda c:c.star)
-                    sel_opt = self.menu_multi(["%s (%d)" % (card.name, card.star) for card in ordered_cards])
+                    if is_bot:
+                        sel_opt = robot.select_tradecards(ordered_cards)
+                    else:
+                        sel_opt = self.menu_multi(["%s (%d)" % (card.name, card.star) for card in ordered_cards])
+                        
                     cards_to_trade = []
                     if len(sel_opt)==1 and sel_opt[0]==0:
                             continue
@@ -515,12 +616,17 @@ class RiskApp:
                 elif sel==1:
                     print "Assign troops"
                     while player.reserve > 0:
-                        self.player_stat(player)
+                        if not all_bot:
+                            self.player_stat(player)
                         
-                        t_id = self.menu([r.name for r in player.territories])
-                        target_deploy = player.territories[t_id]
-                        
-                        num_deploy = self.ask("How many troops (max. %d)?" % player.reserve, 1, player.reserve)
+                        if is_bot:
+                            target_deploy, num_deploy = robot.get_deployment() # > 0
+                        else:
+                            t_id = self.menu([r.name for r in player.territories])
+                            target_deploy = player.territories[t_id]
+                            
+                            num_deploy = self.ask("How many troops (max. %d)?" % player.reserve, 1, player.reserve)
+                            
                         if num_deploy==0:
                             sel_done = self.menu(["Done", "Assign troops"])
                             if sel_done==0:
@@ -532,19 +638,26 @@ class RiskApp:
                     sel = -1
                     capture_win = False
                     while sel != 0:
-                        options = ["End Turn","Show borders","Show occupied","Show cards"]
+                        options = ["End Turn","Game overview", "Show borders","Show occupied","Show cards"]
                         attack_ready = player.get_target(self.game,1)
                         if len(attack_ready)>0:
                             options.append("Attack")
                         
-                        sel = self.menu(options)
-                        if sel==1:#show border stat
+                        if is_bot:
+                            sel = robot.select_action(attack_ready)
+                        else:
+                            sel = self.menu(options)
+                            
+                        if sel==1:
+                            self.all_players_stat()
+                            
+                        elif sel==2:#show border stat
                             self.border_stat(player)
                             
-                        elif sel==2:
+                        elif sel==3:
                             self.player_stat(player)
                                     
-                        elif sel==3:#show cards in hand
+                        elif sel==4:#show cards in hand
                             if len(player.cards)==0:
                                 print player.name,"has no cards in hand"
                             else:
@@ -554,17 +667,25 @@ class RiskApp:
                                     print card.star
                                 print player.name,"has %d stars" % total
                             
-                        elif sel==4:#attack
+                        elif sel==5:#attack
                             attack_target = player.get_target(self.game,1)
-                            print "Select attack target"
-                            sel_target = self.menu(["Cancel"]+["%s (%d)" %(r.name,int(r.troops)) for r in attack_target])
+                            if is_bot:
+                                sel_target = robot.select_attack_target(attack_target)
+                            else:
+                                print "Select attack target"
+                                sel_target = self.menu(["Cancel"]+["%s (%d)" %(r.name,int(r.troops)) for r in attack_target])
+                                
                             if sel_target>0:
                                 target = attack_target[sel_target-1]
                                 
                                 attack_source = [region for region in target.neighbors if region.owner==player and region.troops>1]
                                 if len(attack_source)>1:
-                                    print "Select attack source"
-                                    sel_source = self.menu(["%s (%d)" % (r.name, r.troops) for r in attack_source])
+                                    if is_bot:
+                                        sel_source = robot.select_attack_source(attack_source)
+                                    else:
+                                        print "Select attack source"
+                                        sel_source = self.menu(["%s (%d)" % (r.name, r.troops) for r in attack_source])
+                                        
                                     source = attack_source[sel_source]
                                 else:
                                     source = attack_source[0]
@@ -572,9 +693,14 @@ class RiskApp:
                                 is_captured = False
                                 continue_attack = True
                                 while continue_attack:
-                                    num_attack = self.ask("How many troops deployed (max %d)?" % (source.troops-1), 1, source.troops-1)
+                                    if is_bot:
+                                        num_attack = robot.determine_attack_force(source)
+                                    else:
+                                        num_attack = self.ask("How many troops deployed (max %d)?" % (source.troops-1), 1, source.troops-1)
+                                        
                                     print player.name,"attacked",target.name,"using",num_attack,"force"
-                                    #source.troops -= num_attack
+                                    
+                                    before_battle = copy(target)
                                     
                                     num_wins,num_loss,is_captured = game.attack(player, source, target, num_attack)
                                     
@@ -585,12 +711,19 @@ class RiskApp:
                                     if num_loss==0 and num_wins==0:
                                         print "the battle is draw"
                                         
+                                    if target.troops<0:
+                                        print "ERROR: ",target.name,"troops is",target.troops
+                                        print "before battle: ",target.troops," battle info win:",num_wins,"loss:",num_loss
+                                        sys.exit(1)
                                     if not is_captured:
                                         print target.name,"still guarded by",target.troops,"force"
                                     
                                     continue_attack = num_attack>num_loss and not is_captured
                                     if continue_attack:
-                                        continue_attack = self.menu(["Cease fire","Continue attack"])==1
+                                        if is_bot:
+                                            continue_attack = robot.decide_continue_attack(num_wins, num_loss,is_captured)
+                                        else:
+                                            continue_attack = self.menu(["Cease fire","Continue attack"])==1
                                         
                                 if is_captured:
                                     capture_win = True
@@ -604,29 +737,40 @@ class RiskApp:
                                         break
                     
                     #End turn
-                    if capture_win:
-                        print player.name,"pick a card from the deck"
-                        player.pick_card(game)
-                                
-                    maneuver_source = [r for r in player.territories if r.max_mobile()>0]
-                    if len(maneuver_source)>0:
-                        if self.menu(["End turn","Maneuver"])==1:
-                            while True:
-                                sel_source = self.menu(["%s (%d)" % (r.name, r.troops) for r in maneuver_source])
-                                source = maneuver_source[sel_source]
-                                
-                                num_man = self.ask("How many troop(s)? (max %d)" % (source.max_mobile()), 0, source.max_mobile())
-                                
-                                if num_man > 0:
-                                    available_target = source.get_accessible_nodes()
-                                
-                                    sel_target = self.menu([r.name for r in available_target])
-                                    target = available_target[sel_target]
-                                
-                                    game.do_maneuver(player, source, target, num_man)
-                                    print player.name,"moved",num_man,"troops from",source.name,"to",target.name
-                                    break
-                    game.end_turn()
+                    if game.is_winning(player):
+                        self.all_players_stat()
+                        break
+                    else:
+                        if capture_win:
+                            print player.name,"pick a card from the deck"
+                            player.pick_card(game)
+                                    
+                        maneuver_source = [r for r in player.territories if r.max_mobile()>0]
+                        if len(maneuver_source)>0:
+                            if (is_bot and robot.decide_maneuver()) or self.menu(["End turn","Maneuver"])==1:
+                                while True:
+                                    
+                                    if is_bot:
+                                        source, num_man = robot.determine_maneuver_source(maneuver_source)
+                                    else:
+                                        sel_source = self.menu(["%s (%d)" % (r.name, r.troops) for r in maneuver_source])
+                                        source = maneuver_source[sel_source]
+                                    
+                                        num_man = self.ask("How many troop(s)? (max %d)" % (source.max_mobile()), 0, source.max_mobile())
+                                    
+                                    if num_man > 0:
+                                        available_target = source.get_accessible_nodes()
+                                    
+                                        if is_bot:
+                                            target = robot.select_maneuver_target(available_target)
+                                        else:
+                                            sel_target = self.menu([r.name for r in available_target])
+                                            target = available_target[sel_target]
+                                    
+                                        game.do_maneuver(player, source, target, num_man)
+                                        print player.name,"moved",num_man,"troops from",source.name,"to",target.name
+                                        break
+                        game.end_turn()
             else:
                 break
 

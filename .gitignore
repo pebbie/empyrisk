@@ -35,4 +35,4 @@ nosetests.xml
 .pydevproject
 
 # project specific
-.dat
+*.dat

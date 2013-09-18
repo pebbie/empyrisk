@@ -3,6 +3,7 @@ from os import path
 import sys
 import random
 from copy import copy
+import cPickle as pickle
 
 try:
     import configparser
@@ -10,6 +11,8 @@ except:
     import ConfigParser as configparser
     
 PlayerList = ["Peb","Pandu","Dhota","Fajar","Keni","Gunar","Fainan"]
+
+GAME_SAVE = "risk.dat"
 
 
 def dice_roll(num=1):
@@ -107,14 +110,6 @@ class RiskTerritory:
             for neighbor in node.neighbors:
                 if neighbor.owner==self.owner and neighbor not in result and neighbor not in queue:
                     queue.append(neighbor)
-        """
-        #replace recursive algorithm to iterative
-        for r in self.neighbors:
-            if r.owner == self.owner and r not in result+ref:
-                result.append(r)
-        for r in result:
-            result += r.get_accessible_nodes(result+ref)
-        """
         return result
                 
     def neighbor_analysis(self):
@@ -343,15 +338,31 @@ class RiskGame:
     def is_winning(self, player):
         return len(player.territories) > self.winning_threshold()
         
+    def save(self, filename):
+        with open(filename, "wb") as game_save:
+            pickle.dump(self, game_save)
+            
+    @staticmethod
+    def load(filename):
+        with open(filename, "rb") as game_save:
+            instance = pickle.load(game_save)
+        return instance
+        
 O_EXIT = "Exit game"
+O_CONTINUE = "Continue"
+O_SAVE = "Save game"
+O_QUIT = "Exit"
 
 class RiskApp:
     def __init__(self):
         self.game = RiskGame()
         
-    def menu(self,options):
+    def menu(self,options, message=None):
         while True:
-            print "Available options : "
+            if message is None:
+                print "Available options : "
+            else:
+                print message
             for i,item in enumerate(options):
                 print i, item
             str_in = raw_input("Please select (0..%d)" % (len(options)-1)).strip()
@@ -361,9 +372,12 @@ class RiskApp:
                 break
         return v
         
-    def menu_multi(self,options):
+    def menu_multi(self,options, message=None):
         while True:
-            print "Available options : "
+            if message is None:
+                print "Available options : "
+            else:
+                print message
             print 0,"Cancel"
             for i,item in enumerate(options):
                 print i+1, item
@@ -419,11 +433,22 @@ class RiskApp:
                 print "RISK GAME"
                 print "Select map"
                 levels = game.get_levels()
-                sel = self.menu([O_EXIT]+levels)
+                options = [O_EXIT]
+                if path.exists("risk.dat"):
+                    options.append(O_CONTINUE)
+                
+                sel = self.menu(options+levels)
                 if sel == 0:
                     game.stop()
                 else:
-                    game.load_level(levels[sel-1])
+                    if len(options)>1:
+                        if sel == 1:
+                            self.game = RiskGame.load("risk.dat")
+                            game = self.game
+                        else:
+                            game.load_level(levels[sel-2])
+                    else:
+                        game.load_level(levels[sel-1])
                     print game.level
             
             elif game.state == S_INIT:
@@ -465,6 +490,8 @@ class RiskApp:
                     turn_options.append("Trade risk card(s)")
                 sel = self.menu(turn_options)
                 if sel==0:
+                    if self.menu([O_QUIT, O_SAVE])==1:
+                        game.save(GAME_SAVE)
                     game.stop()
                 
                 elif sel==2:
@@ -588,7 +615,6 @@ class RiskApp:
                                 sel_source = self.menu(["%s (%d)" % (r.name, r.troops) for r in maneuver_source])
                                 source = maneuver_source[sel_source]
                                 
-                                max_man = 
                                 num_man = self.ask("How many troop(s)? (max %d)" % (source.max_mobile()), 0, source.max_mobile())
                                 
                                 if num_man > 0:

@@ -9,7 +9,7 @@ try:
 except:
     import ConfigParser as configparser
     
-PlayerList = ["Peb","Pandu","Dhota","Fajar","Keni","Gunnar","Fainan"]
+PlayerList = ["Peb","Pandu","Dhota","Fajar","Keni","Gunar","Fainan"]
 
 
 def dice_roll(num=1):
@@ -57,6 +57,13 @@ class RiskPlayer:
                 neighbors += sorted(group_neighbors, reverse=True, key=lambda x:x.troops)
         return neighbors
         
+    def pick_card(self, game):
+        self.cards.append(game.pick_card())
+        
+    def deploy_to(self, region, num_deploy):
+        region.troops += num_deploy
+        self.reserve -= num_deploy
+        
     def __repr__(self):
         return "RiskPlayer(name=%s,num_cards=%d,num_territories=%d)" % (self.name, len(self.cards), len(self.territories))
         
@@ -67,6 +74,9 @@ class RiskTerritory:
         self.troops = 0
         self.star = num_star
         self.neighbors = []
+        
+    def max_mobile(self):
+        return self.troops-1
         
     def assign(self,player):
         self.owner = player
@@ -90,11 +100,21 @@ class RiskTerritory:
                 
     def get_accessible_nodes(self,ref=[]):
         result = []
+        queue = [self]
+        while len(queue)>0:
+            node = queue.pop()
+            result.append(node)
+            for neighbor in node.neighbors:
+                if neighbor.owner==self.owner and neighbor not in result and neighbor not in queue:
+                    queue.append(neighbor)
+        """
+        #replace recursive algorithm to iterative
         for r in self.neighbors:
             if r.owner == self.owner and r not in result+ref:
                 result.append(r)
         for r in result:
             result += r.get_accessible_nodes(result+ref)
+        """
         return result
                 
     def neighbor_analysis(self):
@@ -261,7 +281,7 @@ class RiskGame:
     def get_bonus_troops(self, player):
         bonus = 0
         n_terr = len(player.territories)
-        ter_min = len(self.level.regions)/3-2
+        ter_min = len(self.level.territories)/3-2
         if n_terr >= ter_min:
             n_terr -= ter_min
             t_bonus = 1+n_terr/3
@@ -291,6 +311,37 @@ class RiskGame:
             player.reserve += self.level.trade_count[n_stars-self.level.min_trade]
             return True
             
+    def attack(self, player, source, target, numtroop):
+        """return pair of value (num_wins, num_loss, is_captured)"""
+        num_attack = numtroop
+        source.troops -= num_attack
+        
+        battle_result = compare_roll(dice_roll(max(3, num_attack)),dice_roll(target.troops))
+        num_wins,num_loss=0,0
+        for fight in battle_result:
+            if fight==1:
+                num_wins += 1
+                target.troops -= 1
+            elif fight==-1:
+                num_loss += 1
+                num_attack -= 1
+                
+        
+        if target.troops==0:
+            target.capture(player)
+            target.troops = num_attack
+            is_captured = True
+        else:
+            source.troops += num_attack
+            is_captured = False
+        return num_wins, num_loss, is_captured
+        
+    def do_maneuver(self, player, source, target, num_troops):
+        target.troops += num_troops
+        source.troops -= num_troops
+        
+    def is_winning(self, player):
+        return len(player.territories) > self.winning_threshold()
         
 O_EXIT = "Exit game"
 
@@ -436,15 +487,20 @@ class RiskApp:
                 
                 elif sel==1:
                     print "Assign troops"
-                    while reserve > 0:
+                    while player.reserve > 0:
                         self.player_stat(player)
                         
                         t_id = self.menu([r.name for r in player.territories])
-                        num_deploy = self.ask("How many troops (max. %d)?" % reserve, 1, reserve)
                         target_deploy = player.territories[t_id]
-                        target_deploy.troops += num_deploy
-                        reserve -= num_deploy
-                        print player.name,"deployed", num_deploy,"troop(s) to",target_deploy.name,"total",target_deploy.troops
+                        
+                        num_deploy = self.ask("How many troops (max. %d)?" % player.reserve, 1, player.reserve)
+                        if num_deploy==0:
+                            sel_done = self.menu(["Done", "Assign troops"])
+                            if sel_done==0:
+                                break
+                        else:
+                            player.deploy_to(target_deploy, num_deploy)
+                            print player.name,"deployed", num_deploy,"troop(s) to",target_deploy.name,"total",target_deploy.troops
                         
                     sel = -1
                     capture_win = False
@@ -461,7 +517,7 @@ class RiskApp:
                         elif sel==2:
                             self.player_stat(player)
                                     
-                        elif sel==3:#show occupied stat
+                        elif sel==3:#show cards in hand
                             if len(player.cards)==0:
                                 print player.name,"has no cards in hand"
                             else:
@@ -469,7 +525,7 @@ class RiskApp:
                                 for card in player.cards:
                                     total += card.star
                                     print card.star
-                                print player.name,"has %d cards" % total
+                                print player.name,"has %d stars" % total
                             
                         elif sel==4:#attack
                             attack_target = player.get_target(self.game,1)
@@ -485,45 +541,37 @@ class RiskApp:
                                     source = attack_source[sel_source]
                                 else:
                                     source = attack_source[0]
-                                num_attack = 0
+                                
+                                is_captured = False
                                 continue_attack = True
                                 while continue_attack:
-                                    if num_attack>0:
-                                        source.troops += num_attack
                                     num_attack = self.ask("How many troops deployed (max %d)?" % (source.troops-1), 1, source.troops-1)
-                                    print player.name,"attacked",target_deploy.name,"using",num_attack,"force"
-                                    source.troops -= num_attack
+                                    print player.name,"attacked",target.name,"using",num_attack,"force"
+                                    #source.troops -= num_attack
                                     
-                                    battle_result = compare_roll(dice_roll(max(3, num_attack)),dice_roll(target.troops))
-                                    num_wins,num_loss=0,0
-                                    for fight in battle_result:
-                                        if fight==1:
-                                            num_wins += 1
-                                            target.troops -= 1
-                                        elif fight==-1:
-                                            num_loss += 1
-                                            num_attack -= 1
+                                    num_wins,num_loss,is_captured = game.attack(player, source, target, num_attack)
+                                    
                                     if num_wins > 0:
                                         print player.name,"defeated",num_wins,"enemy force"
                                     if num_loss > 0:
                                         print player.name,"lost",num_loss,"force(s)"
                                     if num_loss==0 and num_wins==0:
                                         print "the battle is draw"
-                                    if target.troops>0:
+                                        
+                                    if not is_captured:
                                         print target.name,"still guarded by",target.troops,"force"
                                     
-                                    continue_attack = num_attack>0 and target.troops>0
+                                    continue_attack = num_attack>num_loss and not is_captured
                                     if continue_attack:
                                         continue_attack = self.menu(["Cease fire","Continue attack"])==1
                                         
-                                if target.troops==0:
-                                    target.capture(player)
-                                    target.troops = num_attack
+                                if is_captured:
                                     capture_win = True
                                     print player.name,"conquered",target.name
                                     print target.name,"occupied by",target.troops
                                     print player.name,"now has",len(player.territories),"region(s)"
-                                    if(len(player.territories)>game.winning_threshold()):
+                                    
+                                    if game.is_winning(player):
                                         print player.name,"WINS"
                                         game.stop()
                                         break
@@ -531,28 +579,31 @@ class RiskApp:
                     #End turn
                     if capture_win:
                         print player.name,"pick a card from the deck"
-                        player.cards.append(game.pick_card())
+                        player.pick_card(game)
                                 
-                    maneuver_source = [r for r in player.territories if r.troops>1]
+                    maneuver_source = [r for r in player.territories if r.max_mobile()>0]
                     if len(maneuver_source)>0:
-                        sel = self.menu(["End turn","Maneuver"])
-                        if sel==1:
-                            sel_source = self.menu([r.name for r in maneuver_source])
-                            source = maneuver_source[sel_source]
-                            max_man = source.troops-1
-                            num_man = self.ask("How many troop(s)? (max %d)" % (max_man), 1, max_man)
-                            available_target = source.get_accessible_nodes()
-                            sel_target = self.menu([r.name for r in available_target])
-                            target = available_target[sel_target]
-                            target.troops += num_man
-                            source.troops -= num_man
-                            print player.name,"moved",num_man,"troops from",source.name,"to",target.name
+                        if self.menu(["End turn","Maneuver"])==1:
+                            while True:
+                                sel_source = self.menu(["%s (%d)" % (r.name, r.troops) for r in maneuver_source])
+                                source = maneuver_source[sel_source]
+                                
+                                max_man = 
+                                num_man = self.ask("How many troop(s)? (max %d)" % (source.max_mobile()), 0, source.max_mobile())
+                                
+                                if num_man > 0:
+                                    available_target = source.get_accessible_nodes()
+                                
+                                    sel_target = self.menu([r.name for r in available_target])
+                                    target = available_target[sel_target]
+                                
+                                    game.do_maneuver(player, source, target, num_man)
+                                    print player.name,"moved",num_man,"troops from",source.name,"to",target.name
+                                    break
                     game.end_turn()
             else:
                 break
 
-                
-        
 def main(argv=sys.argv):
     RiskApp().run()
     #print compare_roll(dice_roll(3), dice_roll(2))
